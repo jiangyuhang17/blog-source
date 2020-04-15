@@ -32,7 +32,7 @@ Reader/Writer Mutex（读写互斥量），它们提供两种不同的所有权�
 
 * shared ownerhip（共享所有权 / 读所有权），共享所有权更宽松，任意数量的线程可以同时获得 mutex 的共享所有权。当任何线程持有共享锁时，任何线程都不能在 mutex 上获得排他锁。
 
-读写互斥量通常用于保护很少更新的共享数据。读取线程在读取数据时将获得共享所有权；当需要修改数据时，修改线程首先获取 mutex 的独占所有权，从而确保没有其他线程正在读取数据，然后在修改完成后释放互斥锁。
+读写互斥量通常用于保护很少更新的共享数据。读取线程在读取数据时将获得共享所有权；当需要修改数据时，修改线程首先获取 mutex 的独占所有权，从而确保没有其他线程正在读取数据，然后在修改完成后释放互斥量的锁。
 
 ### Spinlocks
 
@@ -68,12 +68,13 @@ Critical Section（临界区）是拥有锁的那段代码，它从获取锁的�
 
 C++中通过实例化`std::mutex`创建互斥量实例，通过成员函数`lock()`对互斥量上锁，`unlock()`进行解锁；但是**不推荐**直接去调用成员函数，调用成员函数就意味着，必须在每个函数出口都要去调用unlock()，也包括异常的情况。
 
-C++标准库为 mutex 提供了一个RAII语法的模板类`std::lock_guard`，在构造时就能锁住互斥量，并在析构的时候进行解锁，从而保证了一个已锁的互斥量能被正确解锁。
+C++标准库为 mutex 提供了一个RAII语法的类模板`std::lock_guard`，在构造时就能锁住互斥量，并在析构的时候进行解锁，从而保证了一个已锁的互斥量能被正确解锁。
 
 ``` C++
 // 使用 mutex 保护 list
 #include <list>
 #include <mutex>
+#include <algorithm>
 
 std::list<int> some_list;
 std::mutex some_mutex;
@@ -83,9 +84,14 @@ void add_to_list(int new_value)
   std::lock_guard<std::mutex> guard(some_mutex);
   some_list.push_back(new_value);
 }
+
+bool list_contains(int value_to_find) {
+  std::lock_guard<std::mutex> guard(some_mutex);
+  return std::find(some_list.begin(),some_list.end(),value_to_find) != some_list.end(); 
+}
 ```
 
-C++ 17中添加了一个新特性，模板类参数推导，类似`std::lock_guard`这样简单的模板类型的模板参数列表可以省略。
+C++ 17中添加了一个新特性，模板类型参数推导，类似`std::lock_guard`这样简单的模板类型的模板参数列表可以省略。
 
 ``` C++
 std::lock_guard guard(some_mutex1);
@@ -114,7 +120,7 @@ C++ 17共有三种 lock 的RAII类模版：
 
 `std::lock`可以一次性锁住多个互斥量，并且没有副作用(使用避免死锁算法来避免死锁)。（`std::scoped_lock`提供此函数的 RAII 包装，下面会介绍）
 
-`std::lock`对象通过一系列未指定的调用来进行 `lock()`、`try_lock()`和`unlock()` 操作；如果调用 `lock()`或`unlock()` 导致异常，则在重新抛出之前，对所有被锁的对象调用 unlock。
+`std::lock`对象通过一系列隐式调用来进行`lock()`、`try_lock()`和`unlock()`操作；如果调用`lock()`或`unlock()`导致异常，则在重新抛出之前，对所有被锁的对象调用`unlock()`。
 
 ``` C++
 #include <mutex>
@@ -144,7 +150,7 @@ public:
 
 `std::lock_guard`的第二个参数`std::adopt_lock`表示mutex已经被锁住，以及应该使用 mutex 现有锁的 ownership，而不需要在构造器里锁住 mutex。
 
-C++ 17对这种情况提供了支持，`std::scoped_lock`是一种新的RAII类型模板类型，与`std::lock_guard`的功能等价，这个新类型能接受不定数量的互斥量类型作为模板参数，以及相应的互斥量(数量和类型)作为构造参数。互斥量支持构造即上锁，与`std::lock`的用法相同，其解锁阶段是在析构中进行。`std::scoped_lock`的好处在于，可以将所有`std::lock`替换掉，从而减少潜在错误的发生。
+C++ 17对这种情况提供了支持，`std::scoped_lock`是一种新的RAII类型模板，与`std::lock_guard`的功能等价，这个新类型能接受不定数量的互斥量类型作为模板参数，以及相应的互斥量(数量和类型)作为构造参数。互斥量支持构造即上锁，与`std::lock`的用法相同，其解锁阶段是在析构中进行。`std::scoped_lock`的好处在于，可以将所有`std::lock`替换掉，从而减少潜在错误的发生。
 
 ``` C++
 // std::scoped_lock 替代 std::lock + std::lock_guard
@@ -205,6 +211,49 @@ void process_data()
 }
 ```
 
+### 锁的合理粒度
+
+锁的粒度是用来描述单个锁保护的数据量大小；选择足够粗的加锁粒度以确保保护所需的数据很重要，而确保仅针对需要加锁的操作才持有锁也很重要。
+
+特别要注意的是，请勿在持有锁时执行任何耗时的活动，例如文件IO。除非该锁旨在保护对文件的访问，否则在持有该锁的同时执行IO会不必要地延迟其他线程（因为它们将在等待获取锁时阻塞），从而可能消除使用多个线程带来的任何性能提升。
+
+`std::unique_lock`在这种情况下效果很好，因为您可以在代码不再需要访问共享数据时调用`unlock()`，如果以后需要访问代码，则可以再次调用`lock()`
+
+``` C++
+void get_and_process_data() { 
+  std::unique_lock<std::mutex> my_lock(the_mutex); 
+  some_class data_to_process=get_next_data_chunk(); 
+  my_lock.unlock(); 
+  result_type result=process(data_to_process); 
+  my_lock.lock(); 
+  write_result(data_to_process,result); 
+}
+```
+
+假设您正在尝试比较一个简单的数据成员，该成员是一个普通的int。由于int的复制成本很低，因此您可以轻松地复制每个要比较的对象的数据，而只需持有该对象的锁，然后比较复制的值。这意味着您将每个互斥量上的锁保持最短的时间，并且您没有在锁定另一个互斥量的同时持有该锁。
+
+``` C++
+// 在比较运算符中，一次只锁住一个互斥量
+class Y { 
+private:
+  int some_detail; 
+  mutable std::mutex m; 
+  int get_detail() const {
+    std::lock_guard<std::mutex> lock_a(m);
+    return some_detail; 
+  }
+public:
+  Y(int sd): some_detail(sd) {} 
+  friend bool operator==(Y const& lhs, Y const& rhs) { 
+    if(&lhs==&rhs) 
+      return true; 
+    int const lhs_value=lhs.get_detail(); 
+    int const rhs_value=rhs.get_detail(); 
+    return lhs_value==rhs_value; 
+  }
+};
+```
+
 ## 保护共享数据的初始化过程
 
 假设你有一个共享源，构建代价很昂贵（它可能会打开一个数据库连接或分配出很多的内存）。在多线程的情况下，我们要保证共享源只被初始化一次，C++ 标准库提供了`std::once_flag`和`std::call_once`来处理这种情况。
@@ -227,13 +276,48 @@ void foo()
 }
 ```
 
+在类中使用`std::call_once`，注意`std::call_once(flag, &X::func, this);`这样的写法。
+
+``` C++
+class X { 
+private:
+  connection_info connection_details; 
+  connection_handle connection; 
+  std::once_flag connection_init_flag; 
+  void open_connection() { 
+    connection=connection_manager.open(connection_details); 
+  } 
+public:
+  X(connection_info const& connection_details_): connection_details(connection_details_) {} 
+  void send_data(data_packet const& data) { 
+    std::call_once(connection_init_flag,&X::open_connection,this); 
+    connection.send_data(data); 
+  } 
+  data_packet receive_data() { 
+    std::call_once(connection_init_flag,&X::open_connection,this); 
+    return connection.receive_data(); 
+  }
+};
+```
+
+在C++ 11中，`static变量的初始化是线程安全的`，所以当只有一个全局实例时（单例模式），可以不使用`std::call_once`而直接用static变量。（C++ 11规定static变量的初始化只发生在一个线程中，直到初始化完成前其他线程都不会做处理，从而避免了条件竞争。）
+
+``` C++
+class my_class; 
+
+my_class& get_my_class_instance() {
+  static my_class instance;
+  return instance; 
+}
+```
+
 ## std::shared_mutex
 
-对于不常更新的数据结构，使用`std::mutex`会影响并发地读取数据，这里需要另一种不同的互斥量，这种互斥量常被称为 reader-writer mutex，因为其允许两种不同的使用方式：一个"writer"线程独占访问，让多个"reader"线程共享并发访问。C++17标准库提供了两种非常好的互斥量，`std::shared_mutex`和`std::shared_timed_mutex`。
+对于不常更新的数据结构，使用`std::mutex`会影响并发地读取数据，这里需要另一种不同的互斥量，这种互斥量常被称为 reader-writer mutex，因为其允许两种不同的使用方式：一个"writer"线程独占访问，让多个"reader"线程共享并发访问。C++17标准库提供了两种非常好的互斥量，`std::shared_mutex`和`std::shared_timed_mutex`，后者比前者提供了更多操作，但前者性能更高。
 
 对于更新操作，可以使用`std::lock_guard<std::shared_mutex>`和`std::unique_lock<std::shared_mutex>`上锁，与`std::mutex`所做的一样，这就能保证更新线程的独占访问。
 
-对于其他不需要去修改数据结构的线程，其可以使用`std::shared_lock<std::shared_mutex>`获取共享访问。这种RAII类型模板`std::shared_lock`是在C++ 14中的新特性，这与使用`std::unique_lock`一样，除了多线程可以同时获取同一个std::shared_mutex上的共享锁。
+对于其他不需要去修改数据结构的线程，其可以使用`std::shared_lock<std::shared_mutex>`获取共享访问。这种RAII类型模板`std::shared_lock`是在C++ 14中的新特性，这与使用`std::unique_lock`一样，除了多线程可以同时获取同一个`std::shared_mutex`上的共享锁之外。
 
 ``` C++
 // 实现了简单的DNS缓存类
