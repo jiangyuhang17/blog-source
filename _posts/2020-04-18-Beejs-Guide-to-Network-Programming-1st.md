@@ -1,6 +1,6 @@
 ---
 title: Beej's Guide to Network Programming 读书笔记（上）
-date: 2020-04-15 23:00:11
+date: 2020-04-18 16:25:20
 categories: 网络编程
 tags: [网络编程]
 ---
@@ -265,7 +265,7 @@ int main(int argc, char *argv[])
 int socket(int domain, int type, int protocol);
 ```
 
-`domain`是`PF_INET`或`PF_INET6`（在`struct sockaddr_in`中使用`AF_INET`，而在调用`socket()`时使用 PF_INET）；`type`是`SOCK_STREAM`或`SOCK_DGRAM`；而`protocol`可以设置为0，用来帮给予的`type`选择适当的协议。 或者你可以调用 getprotobyname() 来查询你想要的协议，＂tcp＂或＂udp＂。
+`domain`是`PF_INET`或`PF_INET6`（在`struct sockaddr_in`中使用`AF_INET`，而在调用`socket()`时使用`PF_INET`）；`type`是`SOCK_STREAM`或`SOCK_DGRAM`；而`protocol`可以设置为0，用来帮给予的`type`选择适当的协议。 或者你可以调用 getprotobyname() 来查询你想要的协议，＂tcp＂或＂udp＂。
 
 ``` C
 int s;
