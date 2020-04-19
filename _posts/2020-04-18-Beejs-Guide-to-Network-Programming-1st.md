@@ -9,9 +9,9 @@ tags: [网络编程]
 
 Socket 是利用标准 UNIX file descriptors（文件描述符）与其它程序沟通的一种方式。可以用一般的`read()`与`write()`调用通过socket进行通讯，但是`send()`与`recv()`让你能对数据传输有更多的控制权。
 
-一般的 socket 只能读取传输层以上（不含）的数据， raw socket 一般用在设计 network sniffer，可以让应用程序取得网路数据包底层的数据（如 TCP 层、IP 层、数据链路层），并用以分析数据包。
+一般的 socket 只能读取传输层以上（不含）的数据，raw socket 一般用在设计 network sniffer，可以让应用程序取得网路数据包底层的数据（如 TCP 层、IP 层、数据链路层），并用以分析数据包。
 
-主要讨论两种 Internet sockets，一个是 Stream Sockets；而另一个是 Datagram Sockets，分别以`SOCK_STREAM`与`SOCK_DGRAM`来表示。
+主要讨论两种 Internet sockets，一个是 Stream Sockets；而另一个是 Datagram Sockets，分别以`SOCK_STREAM`与`SOCK_DGRAM`来表示。不讨论 raw socket，以`SOCK_RAW`来表示。
 
 为什麽你要用一个不可靠的底层协议（UDP）？有两个理由：第一个理由是速度，第二个理由还是速度。
 
@@ -139,6 +139,18 @@ char ip6[INET6_ADDRSTRLEN]; // 储存 IPv6 字符串的空间
 struct sockaddr_in6 sa6; // pretend this is loaded with something
 inet_ntop(AF_INET6, &(sa6.sin6_addr), ip6, INET6_ADDRSTRLEN);
 printf(" The address is: %s\n" , ip6);
+```
+
+IPv4的老方法是用`inet_addr()`和`inet_ntoa()`实现字符串IP地址和IPv4地址结构in_addr值的转换
+
+``` C
+// !!! 这 是 老 方 法 !!!
+
+// 将字符串IP地址转换为IPv4地址结构in_addr值
+in_addr_t inet_addr(const char * strptr); 
+
+// 将IPv4地址结构in_addr值转换为字符串IP地址
+char * inet_ntoa(struct in_addr * addrptr);
 ```
 
 ## 私有网络
@@ -543,3 +555,22 @@ int gethostname(char *hostname, size_t size);
 ```
 
 比`getpeername()`更简单的函数是`gethostname()`，它会返回你运行程序的电脑名，这个名称之后可以用在`gethostbyname()`，用来定义你本地端电脑的 IP 地址。
+
+IPv4的老方法使用`gethostbyname()`来得到包含域名和IP地址信息的`struct hostent`。
+
+``` C
+// !!! 这 是 老 方 法 !!!
+
+struct hostent *gethostbyname(const char *name);
+
+struct hostent
+{
+    char *h_name;        /* 主机的官方域名 */
+    char **h_aliases;    /* 一个以NULL结尾的主机别名数组 */
+    int h_addrtype;      /* 返回的地址类型，在Internet环境下为AF-INET */
+    int h_length;        /*地址的字节长度 */
+    char **h_addr_list;  /* 一个以0结尾的数组，包含该主机的所有地址*/
+};
+
+#define h_addr h_addr_list[0] /*在h-addr-list中的第一个地址*/
+```

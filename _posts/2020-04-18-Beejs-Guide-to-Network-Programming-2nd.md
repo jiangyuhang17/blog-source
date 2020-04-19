@@ -769,6 +769,9 @@ recv(s, &d, sizeof d, 0); /* 危险， 不具可移植性！ */
 /*
 ** broadcaster.c -- 一个类似 talker.c 的 datagram " client" ，
 ** 差异在於这个可以广播
+**
+** 这里使用的都是IPv4的旧方法
+** gethostbyname， 手动填struct sockaddr_in（inet_addr），inet_ntoa
 */
 
 #include <stdio.h>
