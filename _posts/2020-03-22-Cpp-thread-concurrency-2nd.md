@@ -116,7 +116,115 @@ C++ 17共有三种 lock 的RAII类模版：
 
 为了与各种互斥量类型配合使用，C++标准定义了三个RAII类模板来提供可以持有互斥量锁的对象。它们都可以在构造函数中获取锁，然后在析构函数中释放该锁，但是如果有需要可以通过更复杂的方式使用它们。
 
+## 用互斥量实现线程安全的stack
+
+`std::stack`的接口如下
+
+``` C++
+template<typename T,typename Container=std::deque<T>> 
+class stack { 
+public:
+  explicit stack(const Container&); 
+  explicit stack(Container&& = Container()); 
+  template <class Alloc> explicit stack(const Alloc&); 
+  template <class Alloc> stack(const Container&, const Alloc&); 
+  template <class Alloc> stack(Container&&, const Alloc&); 
+  template <class Alloc> stack(stack&&, const Alloc&); 
+  bool empty() const; 
+  size_t size() const; 
+  T& top(); 
+  T const& top() const; 
+  void push(T const&); 
+  void push(T&&); 
+  void pop(); 
+  void swap(stack&&); 
+  template <class... Args> void emplace(Args&&... args); // New in C++14
+};
+```
+
+即便在很简单的接口中，也可能遇到 race condition
+
+``` C++
+std::stack<int> s;
+if (!s.empty())
+{
+    int n = s.top();
+    s.pop();
+}
+```
+
+思考两种把`top()`和`pop()`合为一步的方法：
+
+1. 在调用`pop()`时传入引用获取结果值；这种方式的明显缺点是，需要重新构造一个栈的元素类型的实例，需要一定开销。
+
+2. `pop()`返回指向弹出元素的指针，指针可以自由拷贝且不会抛异常（这需要管理对象的内存分配，使用`std::shared_ptr`是个不错的选择）；但这个方案对于内置类型来说开销太大。
+
+当栈的元素类型为内置类型时，使用方法一，否则使用方法二。下面定义了一个线程安全的栈。
+
+``` C++
+// An class definition for a thread-safe stack
+#include <exception> 
+#include <memory> // For std::shared_ptr<>
+#include <mutex>
+#include <stack>
+
+struct empty_stack: std::exception 
+{
+  const char* what() const noexcept
+  {
+    return "empty stack!";
+  }
+}; 
+
+template<typename T> 
+class threadsafe_stack 
+{
+private:
+  std::stack<T> data;
+  mutable std::mutex m;
+public: 
+  threadsafe_stack(): data(std::stack<T>()) {}
+  threadsafe_stack(const threadsafe_stack& other)
+  {
+    std::lock_guard<std::mutex> lock(other.m);
+    data = other.data;
+  }
+  threadsafe_stack& operator=(const threadsafe_stack&) = delete; // Assignment operator is deleted
+
+  void push(T new_value)
+  {
+    std::lock_guard<std::mutex> lock(m);
+    data.push(std::move(new_value));
+  }
+
+  std::shared_ptr<T> pop()
+  {
+    std::lock_guard<std::mutex> lock(m);
+    if(data.empty()) throw empty_stack();
+    std::shared_ptr<T> const res(std::make_shared<T>(data.top())); 
+    data.pop(); 
+    return res;
+  }
+  
+  void pop(T& value)
+  {
+    std::lock_guard<std::mutex> lock(m); 
+    if(data.empty()) throw empty_stack();
+    value=data.top(); 
+    data.pop();
+  }
+
+  bool empty() const
+  {
+    std::lock_guard<std::mutex> lock(m);
+    return data.empty();
+  }
+};
+```
+
 ## 避免死锁
+
+### std::scoped_lock 或者 std::lock_guard + std::lock
 
 `std::lock`可以一次性锁住多个互斥量，并且没有副作用(使用避免死锁算法来避免死锁)。（`std::scoped_lock`提供此函数的 RAII 包装，下面会介绍）
 
@@ -161,6 +269,92 @@ friend void swap(X& lhs, X& rhs)
   std::scoped_lock(lhs.m,rhs.m);
   swap(lhs.some_detail,rhs.some_detail);
 }
+```
+
+### 层次锁
+
+建议是使用层次锁，如果一个锁被低层持有，就不允许再上锁。使用层次锁的实例：
+
+``` C++
+// 设定值来表示层级
+hierarchical_mutex high(10000);
+hierarchical_mutex mid(6000);
+hierarchical_mutex low(5000);
+
+void lf() // 最低层函数
+{
+  std::scoped_lock l(low);
+}
+
+void hf()
+{
+  std::scoped_lock l(high);
+  lf(); // 可以调用低层函数
+}
+
+void mf()
+{
+  std::scoped_lock l(mid);
+  hf(); // 中层调用了高层函数，违反了层次结构
+}
+```
+
+``` C++
+//  hierarchical_mutex 的简单实现
+class hierarchical_mutex {
+  std::mutex internal_mutex;
+  const unsigned long hierarchy_value; // 当前层级值
+  unsigned long previous_hierarchy_value; // 前一线程的层级值
+  static thread_local unsigned long this_thread_hierarchy_value; // 所在线程的层级值，thread_local表示值存在于线程存储期
+  
+  void check_for_hierarchy_violation() // 检查是否违反层级结构
+  {
+    if (this_thread_hierarchy_value <= hierarchy_value)
+    {
+      throw std::logic_error("mutex hierarchy violated");
+    }
+  }
+
+  void update_hierarchy_value()
+  {
+    // 先存储当前线程的层级值（用于解锁时恢复）
+    previous_hierarchy_value = this_thread_hierarchy_value;
+    // 再把其设为锁的层级值
+    this_thread_hierarchy_value = hierarchy_value;
+  }
+
+public:
+  explicit hierarchical_mutex(unsigned long value): hierarchy_value(value),  previous_hierarchy_value(0) {}
+
+  void lock()
+  {
+    check_for_hierarchy_violation(); // 要求线程层级值大于锁的层级值
+    internal_mutex.lock(); // 内部锁被锁住
+    update_hierarchy_value(); // 更新层级值
+  }
+
+  void unlock()
+  {
+    if (this_thread_hierarchy_value != hierarchy_value)
+    {
+      throw std::logic_error("mutex hierarchy violated");
+    }
+    // 恢复前一线程的层级值
+    this_thread_hierarchy_value = previous_hierarchy_value;
+    internal_mutex.unlock();
+  }
+
+  bool try_lock()
+  {
+    check_for_hierarchy_violation();
+    if (!internal_mutex.try_lock()) return false;
+    update_hierarchy_value();
+    return true;
+  }
+};
+
+// 初始化为ULONG_MAX以使构造锁时能通过检查
+thread_local unsigned long  hierarchical_mutex::this_thread_hierarchy_value(ULONG_MAX);
 ```
 
 ## 更灵活的锁 std::unique_lock
