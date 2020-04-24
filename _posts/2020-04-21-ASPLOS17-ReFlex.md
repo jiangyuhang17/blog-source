@@ -1,5 +1,5 @@
 ---
-title: ReFlex - Remote Flash ≈ Local Flash
+title: ReFlex - Remote Flash ≈ Local Flash 论文笔记
 date: 2020-04-21 21:36:42
 categories: Paper
 tags: [存储, 调度]
