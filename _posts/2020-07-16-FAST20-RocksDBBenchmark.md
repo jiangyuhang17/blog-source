@@ -1,5 +1,5 @@
 ---
-title: Characterizing, Modeling, and Benchmarking RocksDB Key-Value Workloads at Facebook
+title: Characterizing, Modeling, and Benchmarking RocksDB Key-Value Workloads at Facebook 论文笔记
 date: 2020-07-16 00:01:09
 categories: Paper
 tags: [存储, RocksDB]
